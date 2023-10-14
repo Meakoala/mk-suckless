@@ -1,2 +1,2 @@
-# mk-dwm
-my own patched dwm
+# MK-Suckless
+My Personal repo for suckless app fork

@@ -1,0 +1,260 @@
+From cbc7fde0e6a98a84188fd2a52c5f96753c42ac6f Mon Sep 17 00:00:00 2001
+From: Meakoala <141302175+Meakoala@users.noreply.github.com>
+Date: Wed, 13 Sep 2023 17:58:14 +0700
+Subject: [PATCH] statuscmd patched fix
+
+---
+ config.def.h |  10 +++--
+ dwm.c        | 106 ++++++++++++++++++++++++++++++++++++++++++++++-----
+ 2 files changed, 103 insertions(+), 13 deletions(-)
+
+diff --git a/config.def.h b/config.def.h
+index fcb2dcd..78fd948 100644
+--- a/config.def.h
++++ b/config.def.h
+@@ -4,7 +4,6 @@
+ static const unsigned int borderpx  = 1;        /* border pixel of windows */
+ static const unsigned int snap      = 32;       /* snap pixel */
+ static const unsigned int systraypinning = 0;   /* 0: sloppy systray follows selected monitor, >0: pin systray to monitor X */
+-static const unsigned int systrayonleft = 0;    /* 0: systray in the right corner, >0: systray on left of status text */
+ static const unsigned int systrayspacing = 2;   /* systray spacing */
+ static const int systraypinningfailfirst = 1;   /* 1: if pinning fails, display systray on the first monitor, False: display systray on the last monitor*/
+ static const int showsystray        = 1;        /* 0 means no systray */
+@@ -24,6 +23,7 @@ static const char *colors[][3]      = {
+ 
+ static const char *const autostart[] = {
+   "picom", "-CG", NULL,
++  "dwmblocks", NULL,
+   "lxpolkit", NULL,
+   "copyq", NULL,
+ 	"nitrogen", "--set-zoom-fill", "--random", "/home/kia/Pictures/backgrounds/", NULL,
+@@ -71,6 +71,8 @@ static const Layout layouts[] = {
+ /* helper for spawning shell commands in the pre dwm-5.0 fashion */
+ #define SHCMD(cmd) { .v = (const char*[]){ "/bin/sh", "-c", cmd, NULL } }
+ 
++#define STATUSBAR "dwmblocks"
++
+ /* commands */
+ static const char *roficmd[] = {"rofi", "-modi", "drun", "-show-icons", "-show", NULL};
+ static const char *termcmd[]  = { "kitty", NULL };
+@@ -109,7 +111,7 @@ static const Key keys[] = {
+ 	TAGKEYS(                        XK_7,                      6)
+ 	TAGKEYS(                        XK_8,                      7)
+ 	TAGKEYS(                        XK_9,                      8)
+-	{ MODKEY|ShiftMask,             XK_q,      quit,           {0} },
++	{ MODKEY|ShiftMask,             XK_r,      quit,           {0} },
+ };
+ 
+ /* button definitions */
+@@ -119,7 +121,9 @@ static const Button buttons[] = {
+ 	{ ClkTagBar,            MODKEY,         Button1,        tag,            {0} },
+ 	{ ClkTagBar,            MODKEY,         Button3,        toggletag,      {0} },
+ 	{ ClkWinTitle,          0,              Button2,        zoom,           {0} },
+-	{ ClkStatusText,        0,              Button2,        spawn,          {.v = termcmd } },
++	{ ClkStatusText,        0,              Button1,        sigstatusbar,   {.i = 1} },
++	{ ClkStatusText,        0,              Button2,        sigstatusbar,   {.i = 2} },
++	{ ClkStatusText,        0,              Button3,        sigstatusbar,   {.i = 3} },
+ 	{ ClkClientWin,         MODKEY,         Button1,        movemouse,      {0} },
+ 	{ ClkClientWin,         MODKEY,         Button2,        togglefloating, {0} },
+ 	{ ClkClientWin,         MODKEY,         Button3,        resizemouse,    {0} },
+diff --git a/dwm.c b/dwm.c
+index 9dc866c..027272a 100644
+--- a/dwm.c
++++ b/dwm.c
+@@ -195,6 +195,7 @@ static void focusstack(const Arg *arg);
+ static Atom getatomprop(Client *c, Atom prop);
+ static int getrootptr(int *x, int *y);
+ static long getstate(Window w);
++static pid_t getstatusbarpid();
+ static unsigned int getsystraywidth();
+ static int gettextprop(Window w, Atom atom, char *text, unsigned int size);
+ static void grabbuttons(Client *c, int focused);
+@@ -232,6 +233,7 @@ static void setmfact(const Arg *arg);
+ static void setup(void);
+ static void seturgent(Client *c, int urg);
+ static void showhide(Client *c);
++static void sigstatusbar(const Arg *arg);
+ static void spawn(const Arg *arg);
+ static Monitor *systraytomon(Monitor *m);
+ static void tag(const Arg *arg);
+@@ -271,6 +273,9 @@ static void autostart_exec(void);
+ static Systray *systray = NULL;
+ static const char broken[] = "broken";
+ static char stext[256];
++static int statusw;
++static int statussig;
++static pid_t statuspid = -1;
+ static int screen;
+ static int sw, sh;           /* X display screen geometry width, height */
+ static int bh;               /* bar height */
+@@ -495,6 +500,7 @@ buttonpress(XEvent *e)
+ 	Client *c;
+ 	Monitor *m;
+ 	XButtonPressedEvent *ev = &e->xbutton;
++	char *text, *s, ch;
+ 
+ 	click = ClkRootWin;
+ 	/* focus monitor if necessary */
+@@ -513,9 +519,23 @@ buttonpress(XEvent *e)
+ 			arg.ui = 1 << i;
+ 		} else if (ev->x < x + TEXTW(selmon->ltsymbol))
+ 			click = ClkLtSymbol;
+-		else if (ev->x > selmon->ww - (int)TEXTW(stext) - getsystraywidth())
++    else if (ev->x > selmon->ww - statusw - getsystraywidth()) {
++      x = selmon->ww - statusw - getsystraywidth();
+ 			click = ClkStatusText;
+-		else
++      statussig = 0;
++      for (text = s = stext; *s && x <= ev->x; s++) {
++        if ((unsigned char)(*s) < ' ') {
++          ch = *s;
++          *s = '\0';
++          x += TEXTW(text) - lrpad;
++          *s = ch;
++          text = s + 1;
++           if (x >= ev->x)
++             break;
++           statussig = ch;
++        }
++      }
++     } else
+ 			click = ClkWinTitle;
+ 	} else if ((c = wintoclient(ev->window))) {
+ 		focus(c);
+@@ -855,14 +875,28 @@ drawbar(Monitor *m)
+ 	if (!m->showbar)
+ 		return;
+ 
+-	if(showsystray && m == systraytomon(m) && !systrayonleft)
++	if(showsystray && m == systraytomon(m))
+ 		stw = getsystraywidth();
+ 
+ 	/* draw status first so it can be overdrawn by tags later */
+ 	if (m == selmon) { /* status is only drawn on selected monitor */
++		char *text, *s, ch;
+ 		drw_setscheme(drw, scheme[SchemeNorm]);
+-		tw = TEXTW(stext) - lrpad / 2 + 2; /* 2px extra right padding */
+-		drw_text(drw, m->ww - tw - stw, 0, tw, bh, lrpad / 2 - 2, stext, 0);
++		x = 0;
++		for (text = s = stext; *s; s++) {
++			if ((unsigned char)(*s) < ' ') {
++				ch = *s;
++				*s = '\0';
++				tw = TEXTW(text) - lrpad;
++				drw_text(drw, m->ww - statusw - stw + x, 0, tw, bh, 0, text, 0);
++				x += tw;
++				*s = ch;
++				text = s + 1;
++			}
++		}
++		tw = TEXTW(text) - lrpad + 2;
++		drw_text(drw, m->ww - statusw - stw + x, 0, tw, bh, 0, text, 0);
++		tw = statusw;
+ 	}
+ 
+ 	resizebarwin(m);
+@@ -1040,6 +1074,30 @@ getatomprop(Client *c, Atom prop)
+ 	return atom;
+ }
+ 
++  pid_t
++getstatusbarpid()
++{
++  char buf[32], *str = buf, *c;
++  FILE *fp;
++
++  if (statuspid > 0) {
++    snprintf(buf, sizeof(buf), "/proc/%u/cmdline", statuspid);
++    if ((fp = fopen(buf, "r"))) {
++      fgets(buf, sizeof(buf), fp);
++      while ((c = strchr(str, '/')))
++        str = c + 1;
++      fclose(fp);
++      if (!strcmp(str, STATUSBAR))
++        return statuspid;
++    }
++  }
++  if (!(fp = popen("pidof -s "STATUSBAR, "r")))
++    return -1;
++  fgets(buf, sizeof(buf), fp);
++  pclose(fp);
++  return strtol(buf, NULL, 10);
++}
++
+ unsigned int
+ getsystraywidth()
+ {
+@@ -1500,7 +1558,7 @@ resize(Client *c, int x, int y, int w, int h, int interact)
+ void
+ resizebarwin(Monitor *m) {
+ 	unsigned int w = m->ww;
+-	if (showsystray && m == systraytomon(m) && !systrayonleft)
++	if (showsystray && m == systraytomon(m))
+ 		w -= getsystraywidth();
+ 	XMoveResizeWindow(dpy, m->barwin, m->wx, m->by, w, bh);
+ }
+@@ -1915,6 +1973,20 @@ showhide(Client *c)
+ 	}
+ }
+ 
++void
++sigstatusbar(const Arg *arg)
++{
++  union sigval sv;
++
++  if (!statussig)
++    return;
++  sv.sival_int = arg->i;
++  if ((statuspid = getstatusbarpid()) <= 0)
++    return;
++
++  sigqueue(statuspid, SIGRTMIN+statussig, sv);
++}
++
+ void
+ spawn(const Arg *arg)
+ {
+@@ -2321,8 +2393,25 @@ updatesizehints(Client *c)
+ void
+ updatestatus(void)
+ {
+-	if (!gettextprop(root, XA_WM_NAME, stext, sizeof(stext)))
++	if (!gettextprop(root, XA_WM_NAME, stext, sizeof(stext))) {
+ 		strcpy(stext, "dwm-"VERSION);
++		statusw = TEXTW(stext) - lrpad + 2;
++	} else {
++		char *text, *s, ch;
++
++		statusw  = 0;
++		for (text = s = stext; *s; s++) {
++			if ((unsigned char)(*s) < ' ') {
++				ch = *s;
++				*s = '\0';
++				statusw += TEXTW(text) - lrpad;
++				*s = ch;
++				text = s + 1;
++			}
++		}
++		statusw += TEXTW(text) - lrpad + 2;
++
++	}
+ 	drawbar(selmon);
+ 	updatesystray();
+ }
+@@ -2387,13 +2476,10 @@ updatesystray(void)
+ 	Client *i;
+ 	Monitor *m = systraytomon(NULL);
+ 	unsigned int x = m->mx + m->mw;
+-	unsigned int sw = TEXTW(stext) - lrpad + systrayspacing;
+ 	unsigned int w = 1;
+ 
+ 	if (!showsystray)
+ 		return;
+-	if (systrayonleft)
+-		x -= sw + lrpad / 2;
+ 	if (!systray) {
+ 		/* init systray */
+ 		if (!(systray = (Systray *)calloc(1, sizeof(Systray))))
+-- 
+2.39.2
+

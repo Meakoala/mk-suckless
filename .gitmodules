@@ -1,0 +1,6 @@
+[submodule "mk-dwm"]
+	path = mk-dwm
+	url = https://github.com/Meakoala/mk-dwm.git
+[submodule "mk-dwmblkas"]
+	path = mk-dwmblkas
+	url = https://github.com/Meakoala/mk-dwmblkas
